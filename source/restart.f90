@@ -128,17 +128,18 @@ module restart
     write(u,*) ctrl%nac_projection
     write(u,*) ctrl%zpe_correction
     write(u,*) ctrl%lpzpe_scheme
+    write(u,*) ctrl%lpzpe_base
     write(u,*) ctrl%lpzpe_nah
     write(u,*) ctrl%lpzpe_nbc
     write(u,*) (ctrl%lpzpe_ah(ipair,1),ipair=1,ctrl%lpzpe_nah)
     write(u,*) (ctrl%lpzpe_ah(ipair,2),ipair=1,ctrl%lpzpe_nah)
     write(u,*) (ctrl%lpzpe_bc(ipair,1),ipair=1,ctrl%lpzpe_nbc)
     write(u,*) (ctrl%lpzpe_bc(ipair,2),ipair=1,ctrl%lpzpe_nbc)
-    write(u,*) (ctrl%lpzpe_ke_zpe_ah(ipair),ipair=1,ctrl%lpzpe_nah)
-    write(u,*) (ctrl%lpzpe_ke_zpe_bc(ipair),ipair=1,ctrl%lpzpe_nbc)
     write(u,*) ctrl%ke_threshold
-    write(u,*) ctrl%t_cycle
-    write(u,*) ctrl%t_check
+    write(u,*) ctrl%ilpzpe_f1
+    write(u,*) ctrl%ilpzpe_f2
+    write(u,*) ctrl%ilpzpe_f3
+    write(u,*) ctrl%ilpzpe_f4
     write(u,*) ctrl%pointer_basis
     write(u,*) ctrl%pointer_maxiter
     write(u,*) ctrl%calc_soc
@@ -223,7 +224,7 @@ module restart
     type(trajectory_type) :: traj
     type(ctrl_type) :: ctrl
 
-    integer :: iatom, i,j,k
+    integer :: iatom, ipair, i, j, k
     character(8000) :: string
 
     ! the restart file has to be opened each time, since its contents have to be replaced
@@ -243,13 +244,18 @@ module restart
       write(u,*) (traj%state_pumping_s(i),i=1,ctrl%nstates)
       write(u,*) (traj%pumping_status_s(i),i=1,ctrl%nstates)
     else if (ctrl%zpe_correction==2) then 
+      write(u,*) (traj%t_cycle(ipair),ipair=1,ctrl%lpzpe_nah)
+      write(u,*) (traj%t_check(ipair),ipair=1,ctrl%lpzpe_nah)
+      write(u,*) (traj%lpzpe_ke_zpe_ah(ipair),ipair=1,ctrl%lpzpe_nah)
+      write(u,*) (traj%lpzpe_ke_zpe_bc(ipair),ipair=1,ctrl%lpzpe_nbc)
       write(u,*) (traj%lpzpe_ke_ah(i),i=1,ctrl%lpzpe_nah)
       write(u,*) (traj%lpzpe_ke_bc(i),i=1,ctrl%lpzpe_nbc)
-      write(u,*) traj%lpzpe_cycle
-      write(u,*) traj%lpzpe_iter_incycle
-      write(u,*) traj%lpzpe_starttime
-      write(u,*) traj%lpzpe_endtime
-      write(u,*) traj%in_cycle
+      write(u,*) (traj%lpzpe_cycle(i),i=1,ctrl%lpzpe_nah)
+      write(u,*) (traj%lpzpe_iter_incycle(i),i=1,ctrl%lpzpe_nah)
+      write(u,*) (traj%lpzpe_iter_outcycle(i),i=1,ctrl%lpzpe_nah)
+      write(u,*) (traj%lpzpe_starttime(i),i=1,ctrl%lpzpe_nah)
+      write(u,*) (traj%lpzpe_endtime(i),i=1,ctrl%lpzpe_nah)
+      write(u,*) (traj%in_cycle(i),i=1,ctrl%lpzpe_nah)
     endif
     if (ctrl%time_uncertainty==1) then
       write(u,*) (traj%uncertainty_time_s(i),i=1,ctrl%nstates)
@@ -283,9 +289,10 @@ module restart
     write(u,'(99999(A3,1X))') (traj%element_a(iatom),iatom=1,ctrl%natom)
     write(u,*) (traj%mass_a(iatom),iatom=1,ctrl%natom)
     call vec3write(ctrl%natom, traj%geom_ad,  u, 'Geometry','ES24.16E3')
+    call vec3write(ctrl%natom, traj%geom_old_ad,  u, 'Geometry Old','ES24.16E3')
     call vec3write(ctrl%natom, traj%veloc_ad, u, 'Velocity','ES24.16E3')
     call vec3write(ctrl%natom, traj%veloc_old_ad, u, 'Velocity Old','ES24.16E3')
-    call vec3write(ctrl%natom, traj%veloc_app_ad, u, 'Velocity Old','ES24.16E3')
+    call vec3write(ctrl%natom, traj%veloc_app_ad, u, 'Velocity App','ES24.16E3')
     call vec3write(ctrl%natom, traj%accel_ad, u, 'Acceleration','ES24.16E3')
     if (ctrl%nac_projection==1) then
       call matwrite(3*ctrl%natom, traj%trans_rot_P, u, 'trans_rot_P','ES24.16E3')
@@ -471,6 +478,7 @@ module restart
     endif
 
     call vec3write(ctrl%natom,traj%grad_ad(:,:),u,'grad_ad','ES24.16E3')
+    call vec3write(ctrl%natom,traj%grad_old_ad(:,:),u,'grad_old_ad','ES24.16E3')
     call vec3write(ctrl%natom,traj%decograd_ad(:,:),u,'decograd_ad','ES24.16E3')
 
     call vecwrite(ctrl%nstates, traj%coeff_diag_s, u, 'coeff_diag_s','ES24.16E3')
@@ -689,13 +697,11 @@ module restart
     allocate( ctrl%lpzpe_bc(ctrl%lpzpe_nbc,2) )
     read(u_ctrl,*) (ctrl%lpzpe_bc(ipair,1),ipair=1,ctrl%lpzpe_nbc)
     read(u_ctrl,*) (ctrl%lpzpe_bc(ipair,2),ipair=1,ctrl%lpzpe_nbc)
-    allocate( ctrl%lpzpe_ke_zpe_ah(ctrl%lpzpe_nah) )
-    read(u_ctrl,*) (ctrl%lpzpe_ke_zpe_ah(ipair),ipair=1,ctrl%lpzpe_nah)
-    allocate( ctrl%lpzpe_ke_zpe_bc(ctrl%lpzpe_nbc) )
-    read(u_ctrl,*) (ctrl%lpzpe_ke_zpe_bc(ipair),ipair=1,ctrl%lpzpe_nbc)
     read(u_ctrl,*) ctrl%ke_threshold
-    read(u_ctrl,*) ctrl%t_cycle
-    read(u_ctrl,*) ctrl%t_check
+    read(u_ctrl,*) ctrl%ilpzpe_f1
+    read(u_ctrl,*) ctrl%ilpzpe_f2
+    read(u_ctrl,*) ctrl%ilpzpe_f3
+    read(u_ctrl,*) ctrl%ilpzpe_f4
     read(u_ctrl,*) ctrl%pointer_basis
     read(u_ctrl,*) ctrl%pointer_maxiter
     read(u_ctrl,*) ctrl%calc_soc
@@ -820,13 +826,18 @@ module restart
     read(u_traj,*) (traj%state_pumping_s(i),i=1,ctrl%nstates)
     read(u_traj,*) (traj%pumping_status_s(i),i=1,ctrl%nstates)
   else if (ctrl%zpe_correction==2) then
+    read(u_traj,*) (traj%t_cycle(ipair),ipair=1,ctrl%lpzpe_nah)
+    read(u_traj,*) (traj%t_check(ipair),ipair=1,ctrl%lpzpe_nah)
+    read(u_traj,*) (traj%lpzpe_ke_zpe_ah(ipair),ipair=1,ctrl%lpzpe_nah)
+    read(u_traj,*) (traj%lpzpe_ke_zpe_bc(ipair),ipair=1,ctrl%lpzpe_nbc)
     read(u_traj,*) (traj%lpzpe_ke_ah(i),i=1,ctrl%lpzpe_nah)
     read(u_traj,*) (traj%lpzpe_ke_bc(i),i=1,ctrl%lpzpe_nbc)
-    read(u_traj,*) traj%lpzpe_cycle
-    read(u_traj,*) traj%lpzpe_iter_incycle
-    read(u_traj,*) traj%lpzpe_starttime
-    read(u_traj,*) traj%lpzpe_endtime
-    read(u_traj,*) traj%in_cycle
+    read(u_traj,*) (traj%lpzpe_cycle(i),i=1,ctrl%lpzpe_nah)
+    read(u_traj,*) (traj%lpzpe_iter_incycle(i),i=1,ctrl%lpzpe_nah)
+    read(u_traj,*) (traj%lpzpe_iter_outcycle(i),i=1,ctrl%lpzpe_nah)
+    read(u_traj,*) (traj%lpzpe_starttime(i),i=1,ctrl%lpzpe_nah)
+    read(u_traj,*) (traj%lpzpe_endtime(i),i=1,ctrl%lpzpe_nah)
+    read(u_traj,*) (traj%in_cycle(i),i=1,ctrl%lpzpe_nah)
   endif
   if (ctrl%time_uncertainty==1) then
     read(u_traj,*) (traj%uncertainty_time_s(i),i=1,ctrl%nstates)
@@ -861,6 +872,7 @@ module restart
   read(u_traj,*) (traj%element_a(iatom),iatom=1,ctrl%natom)
   read(u_traj,*) (traj%mass_a(iatom),iatom=1,ctrl%natom)
   call vec3read(ctrl%natom, traj%geom_ad,  u_traj, string)
+  call vec3read(ctrl%natom, traj%geom_old_ad,  u_traj, string)
   call vec3read(ctrl%natom, traj%veloc_ad, u_traj, string)
   call vec3read(ctrl%natom, traj%veloc_old_ad, u_traj, string)
   call vec3read(ctrl%natom, traj%veloc_app_ad, u_traj, string)
@@ -1027,6 +1039,7 @@ module restart
     endif
   endif
   call vec3read(ctrl%natom,traj%grad_ad(:,:),u_traj,string)
+  call vec3read(ctrl%natom,traj%grad_old_ad(:,:),u_traj,string)
   call vec3read(ctrl%natom,traj%decograd_ad(:,:),u_traj,string)
 
   call vecread(ctrl%nstates, traj%coeff_diag_s, u_traj, string)

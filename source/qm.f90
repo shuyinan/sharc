@@ -1072,6 +1072,8 @@ module qm
 
     !nuclear information
     traj%veloc_old_ad=traj%veloc_ad
+    traj%grad_old_ad=traj%grad_ad
+    traj%geom_old_ad=traj%geom_ad
     ctrl%dtstep_old=ctrl%dtstep
 
   endsubroutine

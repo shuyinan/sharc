@@ -402,7 +402,7 @@ contains
 
     character*10 :: state_id
     character*100 :: file_name
-    integer :: iatom, i,j,k
+    integer :: iatom, ipair, i, j, k
     character(8000) :: string
 
     write(state_id, '(i0)') l
@@ -433,13 +433,18 @@ contains
       write(u,*) (traj%state_pumping_s(i),i=1,ctrl%nstates)
       write(u,*) (traj%pumping_status_s(i),i=1,ctrl%nstates)
     else if (ctrl%zpe_correction==2) then
+      write(u,*) (traj%t_cycle(ipair),ipair=1,ctrl%lpzpe_nah)
+      write(u,*) (traj%t_check(ipair),ipair=1,ctrl%lpzpe_nah)
+      write(u,*) (traj%lpzpe_ke_zpe_ah(ipair),ipair=1,ctrl%lpzpe_nah)
+      write(u,*) (traj%lpzpe_ke_zpe_bc(ipair),ipair=1,ctrl%lpzpe_nbc)
       write(u,*) (traj%lpzpe_ke_ah(i),i=1,ctrl%lpzpe_nah)
       write(u,*) (traj%lpzpe_ke_bc(i),i=1,ctrl%lpzpe_nbc)
-      write(u,*) traj%lpzpe_cycle
-      write(u,*) traj%lpzpe_iter_incycle
-      write(u,*) traj%lpzpe_starttime
-      write(u,*) traj%lpzpe_endtime
-      write(u,*) traj%in_cycle
+      write(u,*) (traj%lpzpe_cycle(i),i=1,ctrl%lpzpe_nah)
+      write(u,*) (traj%lpzpe_iter_incycle(i),i=1,ctrl%lpzpe_nah)
+      write(u,*) (traj%lpzpe_iter_outcycle(i),i=1,ctrl%lpzpe_nah)
+      write(u,*) (traj%lpzpe_starttime(i),i=1,ctrl%lpzpe_nah)
+      write(u,*) (traj%lpzpe_endtime(i),i=1,ctrl%lpzpe_nah)
+      write(u,*) (traj%in_cycle(i),i=1,ctrl%lpzpe_nah)
     endif
     if (ctrl%time_uncertainty==1) then
       write(u,*) (traj%uncertainty_time_s(i),i=1,ctrl%nstates)
@@ -467,6 +472,7 @@ contains
     write(u,'(99999(A3,1X))') (traj%element_a(iatom),iatom=1,ctrl%natom)
     write(u,*) (traj%mass_a(iatom),iatom=1,ctrl%natom)
     call vec3write(ctrl%natom, traj%geom_ad,  u, 'Geometry','ES24.16E3')
+    call vec3write(ctrl%natom, traj%geom_old_ad,  u, 'Geometry Old','ES24.16E3')
     call vec3write(ctrl%natom, traj%veloc_ad, u, 'Velocity','ES24.16E3')
     call vec3write(ctrl%natom, traj%veloc_old_ad, u, 'Velocity Old','ES24.16E3')
     call vec3write(ctrl%natom, traj%veloc_app_ad, u, 'Velocity Old','ES24.16E3')
@@ -827,7 +833,7 @@ contains
     type(trajectory_type) :: traj
     type(ctrl_type) :: ctrl
  
-    integer :: imult, iatom, i,j,k, istate,ilaser
+    integer :: imult, iatom, ipair, i,j,k, istate,ilaser
     character(8000) :: string
     real*8 :: dummy_randnum
     integer :: time
@@ -853,13 +859,18 @@ contains
       read(u_traj,*) (traj%state_pumping_s(i),i=1,ctrl%nstates)
       read(u_traj,*) (traj%pumping_status_s(i),i=1,ctrl%nstates)
     else if (ctrl%zpe_correction==2) then
+      read(u_traj,*) (traj%t_cycle(ipair),ipair=1,ctrl%lpzpe_nah)
+      read(u_traj,*) (traj%t_check(ipair),ipair=1,ctrl%lpzpe_nah)
+      read(u_traj,*) (traj%lpzpe_ke_zpe_ah(ipair),ipair=1,ctrl%lpzpe_nah)
+      read(u_traj,*) (traj%lpzpe_ke_zpe_bc(ipair),ipair=1,ctrl%lpzpe_nbc)
       read(u_traj,*) (traj%lpzpe_ke_ah(i),i=1,ctrl%lpzpe_nah)
       read(u_traj,*) (traj%lpzpe_ke_bc(i),i=1,ctrl%lpzpe_nbc)
-      read(u_traj,*) traj%lpzpe_cycle
-      read(u_traj,*) traj%lpzpe_iter_incycle
-      read(u_traj,*) traj%lpzpe_starttime
-      read(u_traj,*) traj%lpzpe_endtime
-      read(u_traj,*) traj%in_cycle
+      read(u_traj,*) (traj%lpzpe_cycle,i=1,ctrl%lpzpe_nah)
+      read(u_traj,*) (traj%lpzpe_iter_incycle,i=1,ctrl%lpzpe_nah)
+      read(u_traj,*) (traj%lpzpe_iter_outcycle,i=1,ctrl%lpzpe_nah)
+      read(u_traj,*) (traj%lpzpe_starttime,i=1,ctrl%lpzpe_nah)
+      read(u_traj,*) (traj%lpzpe_endtime,i=1,ctrl%lpzpe_nah)
+      read(u_traj,*) (traj%in_cycle,i=1,ctrl%lpzpe_nah)
     endif
     if (ctrl%time_uncertainty==1) then
       read(u_traj,*) (traj%uncertainty_time_s(i),i=1,ctrl%nstates)
@@ -888,6 +899,7 @@ contains
     read(u_traj,*) (traj%element_a(iatom),iatom=1,ctrl%natom)
     read(u_traj,*) (traj%mass_a(iatom),iatom=1,ctrl%natom)
     call vec3read(ctrl%natom, traj%geom_ad,  u_traj, string)
+    call vec3read(ctrl%natom, traj%geom_old_ad,  u_traj, string)
     call vec3read(ctrl%natom, traj%veloc_ad, u_traj, string)
     call vec3read(ctrl%natom, traj%veloc_old_ad, u_traj, string)
     call vec3read(ctrl%natom, traj%veloc_app_ad, u_traj, string)

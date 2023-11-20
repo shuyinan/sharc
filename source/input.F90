@@ -538,6 +538,24 @@ module input
 
   ! =====================================================
 
+    ! number of AH bonds
+    line=get_value_from_key('number_ah',io)
+    if (io==0) then
+      read(line,*) ctrl%lpzpe_nah
+    else
+      ctrl%lpzpe_nah=1
+    endif
+
+    ! number of BC bonds
+    line=get_value_from_key('number_bc',io)
+    if (io==0) then
+      read(line,*) ctrl%lpzpe_nbc
+    else
+      ctrl%lpzpe_nbc=1
+    endif
+
+  ! =====================================================
+
   ! then call the allocator for the trajectory
     call allocate_traj(traj,ctrl)
 
@@ -973,7 +991,7 @@ module input
       select case (trim(line))
         case ('pumping')
           ctrl%zpe_correction=1
-        case ('lp')
+        case ('lp-zpe')
           ctrl%zpe_correction=2
         case default
           write(0,*) 'Unknown keyword ',trim(line),' to "zpe_correction"!'
@@ -982,26 +1000,23 @@ module input
     endif
 
     ! LP-ZPE correction scheme input
- 
+    ! Some of the inputs are used for dLP-ZPE as well 
+
     ! LP-ZPE correction scheme
     line=get_value_from_key('lpzpe_scheme',io)
     if (io==0) then
-      read(line,*) ctrl%lpzpe_scheme
+      select case (trim(line))
+        case ('lp-zpe')
+          ctrl%lpzpe_scheme=0
+        case ('ilp-zpe')
+          ctrl%lpzpe_scheme=1
+        case default
+          write(0,*) 'Unknown keyword ',trim(line),' to "lpzpe_scheme"!'
+          stop 1
+      endselect
     else
-      ! default: using original scheme
-      ctrl%lpzpe_scheme=0
-    endif
-
-    ! number of AH bonds
-    line=get_value_from_key('number_ah',io)
-    if (io==0) then
-      read(line,*) ctrl%lpzpe_nah
-    endif
-
-    ! number of BC bonds
-    line=get_value_from_key('number_bc',io)
-    if (io==0) then
-      read(line,*) ctrl%lpzpe_nbc
+      ! default: using improved LP-ZPE scheme
+      ctrl%lpzpe_scheme=1
     endif
 
     ! list of AH bonds
@@ -1021,6 +1036,9 @@ module input
       enddo
       ! values is not needed anymore
       deallocate(values)
+    else 
+      allocate(ctrl%lpzpe_ah(ctrl%lpzpe_nah,2))
+      ctrl%lpzpe_ah(:,:)=-123
     endif
 
     ! list of BC bonds
@@ -1040,60 +1058,127 @@ module input
       enddo
       ! values is not needed anymore
       deallocate(values)
+    else 
+      allocate(ctrl%lpzpe_bc(ctrl%lpzpe_nbc,2))
+      ctrl%lpzpe_bc=-123
     endif
+
+    ! base level of ZPE check 
+    line=get_value_from_key('lpzpe_base',io)
+    if (io==0) then
+      select case (trim(line))
+        case ('first_cycle')
+          ctrl%lpzpe_base=0
+        case ('zpe')
+          ctrl%lpzpe_base=1
+        case ('direct')
+          ctrl%lpzpe_base=2
+        case ('on_the_fly')
+          ctrl%lpzpe_base=2
+        case default
+          write(0,*) 'Unknown keyword ',trim(line),' to "lpzpe_base"!'
+          stop 1
+      endselect
+    else
+      ! default: original LP-ZPE uses first cycle as baseline 
+      if (ctrl%lpzpe_scheme==0) then 
+        ctrl%lpzpe_base=0
+      else if (ctrl%lpzpe_scheme==1) then 
+        ctrl%lpzpe_base=1
+      endif
+    endif
+
 
     ! zpe of AH bonds
     line=get_value_from_key('ah_zpe',io)
     if (io==0) then
       ! value needs to be split into values (each one is a string)
       call split(line,' ',values,n)
-      allocate(ctrl%lpzpe_ke_zpe_ah(n))
       ! read AH bonds 
       do i=1,n
-        read(values(i),*) ctrl%lpzpe_ke_zpe_ah(i)
+        read(values(i),*) traj%lpzpe_ke_zpe_ah(i)
       enddo
       ! values is not needed anymore
       deallocate(values)
+      traj%lpzpe_ke_zpe_ah=traj%lpzpe_ke_zpe_ah/2/au2eV
     endif
+
 
     ! zpe of BC bonds
     line=get_value_from_key('bc_zpe',io)
     if (io==0) then
       ! value needs to be split into values (each one is a string)
       call split(line,' ',values,n)
-      allocate(ctrl%lpzpe_ke_zpe_bc(n))
       ! read AH bonds 
       do i=1,n
-        read(values(i),*) ctrl%lpzpe_ke_zpe_bc(i)
+        read(values(i),*) traj%lpzpe_ke_zpe_bc(i)
       enddo
       ! values is not needed anymore
       deallocate(values)
-    else 
-      allocate(ctrl%lpzpe_ke_zpe_bc(ctrl%lpzpe_nbc))
-      do i=1,ctrl%lpzpe_nbc
-        ctrl%lpzpe_ke_zpe_bc(i)=0.0
-      enddo
     endif
 
     ! read kinetic energy threshold
     line=get_value_from_key('ke_threshold',io)
     if (io==0) then
       read(line,*) ctrl%ke_threshold
+    else
+      ctrl%ke_threshold=0.d0
     endif
+    ctrl%ke_threshold=ctrl%ke_threshold/au2eV
 
     ! read time cycle of zpe checking
     line=get_value_from_key('t_cycle',io)
     if (io==0) then
-      read(line,*) ctrl%t_cycle
+      call split(line,' ',values,n)
+      ! read t_cycle for each AH bond
+      do i=1,ctrl%lpzpe_nah
+        read(values(i),*) traj%t_cycle(i)
+      enddo
+      deallocate(values)
     endif
-    ctrl%t_cycle=ctrl%t_cycle/au2fs
+    traj%t_cycle(:)=traj%t_cycle(:)/au2fs
 
     ! read period of time for kinetic energy averaging
     line=get_value_from_key('t_check',io)
     if (io==0) then
-      read(line,*) ctrl%t_check
+      call split(line,' ',values,n)
+      ! read t_check for each AH bond
+      do i=1,ctrl%lpzpe_nah 
+        read(values(i),*) traj%t_check(i)
+      enddo
+      deallocate(values)
+    else 
+      traj%t_check=traj%t_cycle*au2fs
     endif
-    ctrl%t_check=ctrl%t_check/au2fs
+    traj%t_check(:)=traj%t_check(:)/au2fs
+
+    ! set up four weights in objective function in improved LP-ZPE scheme
+    ! only used in lpzpe_scheme=1
+    line=get_value_from_key('ilpzpe_f1',io)
+    if (io==0) then
+      read(line,*) ctrl%ilpzpe_f1
+    else 
+      ctrl%ilpzpe_f1=100.0
+    endif
+
+    line=get_value_from_key('ilpzpe_f2',io)
+    if (io==0) then
+      read(line,*) ctrl%ilpzpe_f2
+    else
+      ctrl%ilpzpe_f2=100.0
+    endif
+    line=get_value_from_key('ilpzpe_f3',io)
+    if (io==0) then
+      read(line,*) ctrl%ilpzpe_f3
+    else
+      ctrl%ilpzpe_f3=1.0
+    endif
+    line=get_value_from_key('ilpzpe_f4',io)
+    if (io==0) then
+      read(line,*) ctrl%ilpzpe_f4
+    else
+      ctrl%ilpzpe_f4=1.0
+    endif
 
     ! Done LP-ZPE correction scheme input
    
@@ -1599,12 +1684,35 @@ module input
           case (1)
             write(u_log,'(a)') 'Using Zero Point Energy pumping method tomaintain ZPE'
           case (2)
-            write(u_log,'(a)') 'Using Local Pair Zero Point Energy to maintain ZPE'
+            write(u_log,'(a)') 'Using Local Pair Zero Point Energy scheme to maintain ZPE'
             if (ctrl%lpzpe_scheme==0) then 
-              write(u_log,'(a)') 'Using original LP-ZPE scheme: skip correction if BC kinetic energy is not enough'
-            else if (ctrl%lpzpe_scheme==1) then
-              write(u_log,'(a)') 'Using new LP-ZPE scheme: adjust the correction energy based on BC kinetic energy'
+              write(u_log,'(a)') 'Using original LP-ZPE scheme by Mukherjee and Barbatti'
+            else if (ctrl%lpzpe_scheme==1) then 
+              write(u_log,'(a)') 'Using improved LP-ZPE scheme by Shu and Truhlar'
             endif
+            write(u_log,'(a)') 'List of AH bonds'
+            do i=1,ctrl%lpzpe_nah
+              do j=1,2
+                k=(i-1)*2+j
+                write(u_log,*) ctrl%lpzpe_ah(i,j)
+              enddo
+            enddo
+            write(u_log,'(a)') 'List of BC bonds'
+            do i=1,ctrl%lpzpe_nbc
+              do j=1,2
+                k=(i-1)*2+j
+                write(u_log,*) ctrl%lpzpe_bc(i,j)
+              enddo
+            enddo
+            if (ctrl%lpzpe_base==0) then
+              write(u_log,'(a)') 'the base line kinetic energy (half of ZPE) will be computed at first cycle'
+            else if (ctrl%lpzpe_base==1) then
+              write(u_log,'(a)') 'the base line kinetic energy (half of ZPE) has been set from input'
+            else if (ctrl%lpzpe_base==2) then
+              write(u_log,'(a)') 'the base line kinetic energy (half of ZPE) will be computed on the fly'
+            endif
+          case (3)
+            write(u_log,'(a)') 'Using on the fly Local Pair Zero Point Energy scheme to maintain ZPE'
         endselect
         select case (ctrl%coupling)
           case (0)

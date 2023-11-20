@@ -161,6 +161,7 @@ type trajectory_type
   real*8,pointer :: geom_ad(:,:)                         !< Cartesian coordinates of atom in a.u. (bohr)
 #else
   real*8,allocatable :: geom_ad(:,:)                     !< Cartesian coordinates of atom in a.u. (bohr)
+  real*8,allocatable :: geom_old_ad(:,:)                 !< Cartesian coordinates of atom in a.u. (bohr) of last time step
 #endif
   real*8,allocatable :: veloc_ad(:,:)                    !< Cartesian velocity in a.u. (bohr/atu)
   real*8,allocatable :: veloc_old_ad(:,:)                !< Cartesian velocity in a.u. (bohr/atu) of last timestep
@@ -259,6 +260,7 @@ type trajectory_type
   real*8, allocatable :: frustrated_hop_vec_ssad(:,:,:,:)!< the vector to perform frustrated hop 
 
   real*8, allocatable :: grad_ad(:,:)                    !< final gradient used in velocity verlet
+  real*8, allocatable :: grad_old_ad(:,:)                !< final gradient used in velocity verlet of last time step
   real*8, allocatable :: decograd_ad(:,:)                !< decoherent gradient
 
   ! coefficient information
@@ -289,13 +291,18 @@ type trajectory_type
   integer, allocatable :: pumping_status_s(:)            !< whether it's in a pumping process or not 0=no, 1=yes
 
   ! LP-ZPE correction scheme
+  real*8, allocatable :: lpzpe_ke_zpe_ah(:)              !< base line kinetic energy of A-H mode
+  real*8, allocatable :: lpzpe_ke_zpe_bc(:)              !< base line kinetic energy of B-C mode
+  real*8, allocatable :: t_cycle(:)                      !< time cycle of zpe checking
+  real*8, allocatable :: t_check(:)                      !< period of time for kinetic energy averaging
   real*8, allocatable :: lpzpe_ke_ah(:)                  !< kinetic energy of A-H mode
   real*8, allocatable :: lpzpe_ke_bc(:)                  !< kinetic energy of B-C mode
-  integer :: lpzpe_cycle                                 !< cycles of vibrations
-  integer :: lpzpe_iter_incycle                          !< iterations within a cycle
-  real*8 :: lpzpe_starttime                              !< the start time of cummulation
-  real*8 :: lpzpe_endtime                                !< the end time of cummulation
-  integer :: in_cycle                                    !< indicator of whether in cycles, 0=out of cycles, 1=in cycles 
+  integer, allocatable :: lpzpe_cycle(:)                 !< cycles of vibrations for each AH bond
+  integer, allocatable :: lpzpe_iter_incycle(:)          !< iterations within a cycle for each AH bond
+  integer, allocatable :: lpzpe_iter_outcycle(:)         !< iterations outside a cycle for each AH bond
+  real*8, allocatable :: lpzpe_starttime(:)              !< the start time of cummulation for each AH bond
+  real*8, allocatable :: lpzpe_endtime(:)                !< the end time of cummulation for each AH bond
+  integer, allocatable :: in_cycle(:)                    !< indicator of whether in cycles, 0=out of cycles, 1=in cycles for each AH bond
  
   ! gradient and nac selection information
   logical,allocatable :: selG_s(:)                       !< selection mask for gradients
@@ -426,15 +433,16 @@ type ctrl_type
 
 ! lp-zpe
   integer :: lpzpe_scheme                   !< correction_scheme=0 skip correction if BC bonds do not have enough kinetic energy; 1=forced correction by moving all kinetic energies of BC bonds to AH bonds
+  integer :: lpzpe_base                     !< 0=compute lpzpe_ke_zpe_ah and lpzpe_ke_zpe_bc from first time cycle - used in original LP-ZPE, 1=set lpzpe_ke_zpe_ah and lpzpe_ke_zpe_bc from input
   integer :: lpzpe_nah                      !< number of A-H bond pairs
   integer :: lpzpe_nbc                      !< number of B-C bond pairs
   integer, allocatable :: lpzpe_ah(:,:)     !< atom indicies of A-H bond pairs
   integer, allocatable :: lpzpe_bc(:,:)     !< atom indicies of B-C bond pairs
-  real*8, allocatable :: lpzpe_ke_zpe_ah(:) !< kinetic energy of A-H mode
-  real*8, allocatable :: lpzpe_ke_zpe_bc(:) !< kinetic energy of B-C mode
   real*8 :: ke_threshold                    !< threshold for zpe leaking
-  real*8 :: t_cycle                         !< time cycle of zpe checking
-  real*8 :: t_check                         !< period of time for kinetic energy averaging
+  real*8 :: ilpzpe_f1                       !< weights in objective function in iLP-ZPE to maintain AH bond averaged kinetic energy
+  real*8 :: ilpzpe_f2                       !< weights in objective function in iLP-ZPE to conserve total energy
+  real*8 :: ilpzpe_f3                       !< weights in objective function in iLP-ZPE to conserve center of mass momentum
+  real*8 :: ilpzpe_f4                       !< weights in objective function in iLP-ZPE to conserve angular momentum
  
   integer :: calc_soc                       !< request SOC, otherwise only the diagonal elements of H (plus any laser interactions) are taken into account\n 0=no soc, 1=soc enabled
   integer :: calc_grad                      !< request gradients:   \n        0=all in step 1, 1=select in step 1, 2=select in step 2
@@ -543,7 +551,7 @@ integer, parameter :: u_qm_QMout=42          !< here SHARC retrieves the results
     subroutine allocate_traj(traj,ctrl)
       !< Allocates all arrays in traj
       !< Does not allocate arrays in ctrl (laser-related, actstates_s,
-      !  nstates_m, lpzpe_ah, lpzpe_bc, lpzpe_ke_zpe_ah, lpzpe_ke_zpe_bc)
+      !  nstates_m, lpzpe_ah, lpzpe_bc)
       !< Reads natom and nstates from ctrl
       !< Initializes all elements of all arrays to -123, 'Q' or .true.
       implicit none
@@ -576,6 +584,10 @@ integer, parameter :: u_qm_QMout=42          !< here SHARC retrieves the results
       allocate(traj%geom_ad(natom,3),stat=status)
       if (status/=0) stop 'Could not allocate geom_ad'
       traj%geom_ad=-123.d0
+
+      allocate(traj%geom_old_ad(natom,3),stat=status)
+      if (status/=0) stop 'Could not allocate geom_old_ad'
+      traj%geom_old_ad=-123.d0
 
       allocate(traj%veloc_ad(natom,3),stat=status)
       if (status/=0) stop 'Could not allocate veloc_ad'
@@ -912,6 +924,10 @@ integer, parameter :: u_qm_QMout=42          !< here SHARC retrieves the results
       if (status/=0) stop 'Could not allocate grad_ad'
       traj%grad_ad=-123.d0
 
+      allocate(traj%grad_old_ad(natom,3),stat=status)
+      if (status/=0) stop 'Could not allocate grad_old_ad'
+      traj%grad_old_ad=-123.d0
+
       allocate(traj%decograd_ad(natom,3),stat=status)
       if (status/=0) stop 'Could not allocate decograd_ad'
       traj%decograd_ad=-123.d0
@@ -976,6 +992,46 @@ integer, parameter :: u_qm_QMout=42          !< here SHARC retrieves the results
       if (status/=0) stop 'Could not allocate lpzpe_ke_bc'
       traj%lpzpe_ke_bc=-123.d0
 
+      allocate(traj%lpzpe_ke_zpe_ah(nah),stat=status)
+      if (status/=0) stop 'Could not allocate lpzpe_ke_zpe_ah'
+      traj%lpzpe_ke_zpe_ah=-123.d0
+
+      allocate(traj%lpzpe_ke_zpe_bc(nbc),stat=status)
+      if (status/=0) stop 'Could not allocate lpzpe_ke_zpe_bc'
+      traj%lpzpe_ke_zpe_bc=-123.d0
+
+      allocate(traj%t_cycle(nah),stat=status)
+      if (status/=0) stop 'Could not allocate t_cycle'
+      traj%t_cycle=-123.d0
+
+      allocate(traj%t_check(nah),stat=status)
+      if (status/=0) stop 'Could not allocate t_check'
+      traj%t_check=-123.d0
+
+      allocate(traj%lpzpe_cycle(nah),stat=status)
+      if (status/=0) stop 'Could not allocate lpzpe_cycle'
+      traj%lpzpe_cycle=-123
+
+      allocate(traj%lpzpe_iter_incycle(nah),stat=status)
+      if (status/=0) stop 'Could not allocate lpzpe_iter_incycle'
+      traj%lpzpe_iter_incycle=-123
+
+      allocate(traj%lpzpe_iter_outcycle(nah),stat=status)
+      if (status/=0) stop 'Could not allocate lpzpe_iter_outcycle'
+      traj%lpzpe_iter_outcycle=-123
+
+      allocate(traj%lpzpe_starttime(nah),stat=status)
+      if (status/=0) stop 'Could not allocate lpzpe_starttime'
+      traj%lpzpe_starttime=-123.d0
+
+      allocate(traj%lpzpe_endtime(nah),stat=status)
+      if (status/=0) stop 'Could not allocate lpzpe_endtime'
+      traj%lpzpe_endtime=-123.d0
+
+      allocate(traj%in_cycle(nah),stat=status)
+      if (status/=0) stop 'Could not allocate in_cycle'
+      traj%in_cycle=-123
+
     endsubroutine
 
     subroutine deallocate_ctrl(ctrl)
@@ -989,8 +1045,6 @@ integer, parameter :: u_qm_QMout=42          !< here SHARC retrieves the results
       if (allocated(ctrl%laserenergy_tl))             deallocate(ctrl%laserenergy_tl)
       if (allocated(ctrl%lpzpe_ah))                   deallocate(ctrl%lpzpe_ah)
       if (allocated(ctrl%lpzpe_bc))                   deallocate(ctrl%lpzpe_bc)
-      if (allocated(ctrl%lpzpe_ke_zpe_ah))            deallocate(ctrl%lpzpe_ke_zpe_ah)
-      if (allocated(ctrl%lpzpe_ke_zpe_bc))            deallocate(ctrl%lpzpe_ke_zpe_bc)
       if (allocated(ctrl%thermostat_const))           deallocate(ctrl%thermostat_const)
 
     endsubroutine
@@ -1015,6 +1069,7 @@ integer, parameter :: u_qm_QMout=42          !< here SHARC retrieves the results
     if (allocated(traj%grad_MCH_sad))               deallocate(traj%grad_MCH_sad)
     if (allocated(traj%NACdR_ssad))                 deallocate(traj%NACdR_ssad)
     if (allocated(traj%geom_ad))                    deallocate(traj%geom_ad)
+    if (allocated(traj%geom_old_ad))                deallocate(traj%geom_old_ad)
 #endif
 
     if (allocated(traj%atomicnumber_a))             deallocate(traj%atomicnumber_a)
@@ -1086,6 +1141,7 @@ integer, parameter :: u_qm_QMout=42          !< here SHARC retrieves the results
     if (allocated(traj%dendt_MCH_ss))               deallocate(traj%dendt_MCH_ss)
     if (allocated(traj%dendt_diag_ss))              deallocate(traj%dendt_diag_ss)
     if (allocated(traj%grad_ad))                    deallocate(traj%grad_ad)
+    if (allocated(traj%grad_old_ad))                deallocate(traj%grad_old_ad)
     if (allocated(traj%decograd_ad))                deallocate(traj%decograd_ad)
     if (allocated(traj%coeff_diag_s))               deallocate(traj%coeff_diag_s)
     if (allocated(traj%coeff_diag_old_s))           deallocate(traj%coeff_diag_old_s)
@@ -1110,8 +1166,18 @@ integer, parameter :: u_qm_QMout=42          !< here SHARC retrieves the results
     if (allocated(traj%allowed_time_s))             deallocate(traj%allowed_time_s)
     if (allocated(traj%U_pointer_ss))               deallocate(traj%U_pointer_ss)
     if (allocated(traj%U_pointer_old_ss))           deallocate(traj%U_pointer_old_ss)
+    if (allocated(traj%lpzpe_ke_zpe_ah))            deallocate(traj%lpzpe_ke_zpe_ah)
+    if (allocated(traj%lpzpe_ke_zpe_bc))            deallocate(traj%lpzpe_ke_zpe_bc)
+    if (allocated(traj%t_cycle))                    deallocate(traj%t_cycle)
+    if (allocated(traj%t_check))                    deallocate(traj%t_check)
     if (allocated(traj%lpzpe_ke_ah))                deallocate(traj%lpzpe_ke_ah)
     if (allocated(traj%lpzpe_ke_bc))                deallocate(traj%lpzpe_ke_bc)
+    if (allocated(traj%lpzpe_cycle))                deallocate(traj%lpzpe_cycle)
+    if (allocated(traj%lpzpe_iter_incycle))         deallocate(traj%lpzpe_iter_incycle)
+    if (allocated(traj%lpzpe_iter_outcycle))        deallocate(traj%lpzpe_iter_outcycle)
+    if (allocated(traj%lpzpe_starttime))            deallocate(traj%lpzpe_starttime)
+    if (allocated(traj%lpzpe_endtime))              deallocate(traj%lpzpe_endtime)
+    if (allocated(traj%in_cycle))                   deallocate(traj%in_cycle)
     if (allocated(traj%thermostat_random))          deallocate(traj%thermostat_random)
   endsubroutine
 
@@ -1145,6 +1211,7 @@ integer, parameter :: u_qm_QMout=42          !< here SHARC retrieves the results
     write(u,'(A20,1X,L1)') 'grad_MCH_sad',    allocated(traj%grad_MCH_sad    )
     write(u,'(A20,1X,L1)') 'NACdR_ssad',      allocated(traj%NACdR_ssad      )
     write(u,'(A20,1X,L1)') 'geom_ad',         allocated(traj%geom_ad         )
+    write(u,'(A20,1X,L1)') 'geom_old_ad',     allocated(traj%geom_old_ad     )
 #endif
 
 
@@ -1217,6 +1284,7 @@ integer, parameter :: u_qm_QMout=42          !< here SHARC retrieves the results
     write(u,'(A20,1X,L1)') 'Gmatrix_ssad',     allocated(traj%Gmatrix_ssad     )
     write(u,'(A20,1X,L1)') 'Gmatrix_old__ssad',allocated(traj%Gmatrix_old_ssad )
     write(u,'(A20,1X,L1)') 'grad_ad',          allocated(traj%grad_ad          )
+    write(u,'(A20,1X,L1)') 'grad_old_ad',      allocated(traj%grad_old_ad      )
     write(u,'(A20,1X,L1)') 'decograd_ad',      allocated(traj%decograd_ad      )
     write(u,'(A20,1X,L1)') 'coeff_diag_s',     allocated(traj%coeff_diag_s     )
     write(u,'(A20,1X,L1)') 'coeff_diag_old_s', allocated(traj%coeff_diag_old_s )
@@ -1243,10 +1311,18 @@ integer, parameter :: u_qm_QMout=42          !< here SHARC retrieves the results
     write(u,'(A20,1X,L1)') 'U_pointer_old_ss', allocated(traj%U_pointer_old_ss  )
     write(u,'(A20,1X,L1)') 'lpzpe_ah',         allocated(ctrl%lpzpe_ah         )
     write(u,'(A20,1X,L1)') 'lpzpe_bc',         allocated(ctrl%lpzpe_bc         )
-    write(u,'(A20,1X,L1)') 'lpzpe_ke_zpe_ah',  allocated(ctrl%lpzpe_ke_zpe_ah  )
-    write(u,'(A20,1X,L1)') 'lpzpe_ke_zpe_bc',  allocated(ctrl%lpzpe_ke_zpe_bc  )
+    write(u,'(A20,1X,L1)') 'lpzpe_ke_zpe_ah',  allocated(traj%lpzpe_ke_zpe_ah  )
+    write(u,'(A20,1X,L1)') 'lpzpe_ke_zpe_bc',  allocated(traj%lpzpe_ke_zpe_bc  )
     write(u,'(A20,1X,L1)') 'lpzpe_ke_ah',      allocated(traj%lpzpe_ke_ah      )
     write(u,'(A20,1X,L1)') 'lpzpe_ke_bc',      allocated(traj%lpzpe_ke_bc      )
+    write(u,'(A20,1X,L1)') 'lpzpe_cycle',      allocated(traj%lpzpe_cycle      )
+    write(u,'(A20,1X,L1)') 'lpzpe_iter_incycle',      allocated(traj%lpzpe_iter_incycle     )
+    write(u,'(A20,1X,L1)') 'lpzpe_iter_outcycle',     allocated(traj%lpzpe_iter_outcycle    )
+    write(u,'(A20,1X,L1)') 'lpzpe_starttime',  allocated(traj%lpzpe_starttime  )
+    write(u,'(A20,1X,L1)') 'lpzpe_endtime',    allocated(traj%lpzpe_endtime    )
+    write(u,'(A20,1X,L1)') 'in_cycle',         allocated(traj%in_cycle         )
+    write(u,'(A20,1X,L1)') 't_cycle',          allocated(traj%t_cycle          )
+    write(u,'(A20,1X,L1)') 't_check',          allocated(traj%t_check          ) 
     write(u,'(A20,1X,L1)') 'nstates_m',        allocated(ctrl%nstates_m        )
     write(u,'(A20,1X,L1)') 'actstates_s',      allocated(ctrl%actstates_s      )
 
@@ -1254,6 +1330,7 @@ integer, parameter :: u_qm_QMout=42          !< here SHARC retrieves the results
 
     write(u,'(A20,1X,L1)') 'mass_a',          any((traj%mass_a          ).ne.(traj%mass_a          ))
     write(u,'(A20,1X,L1)') 'geom_ad',         any((traj%geom_ad         ).ne.(traj%geom_ad         ))
+    write(u,'(A20,1X,L1)') 'geom_old_ad',     any((traj%geom_old_ad     ).ne.(traj%geom_old_ad     ))
     write(u,'(A20,1X,L1)') 'veloc_ad',        any((traj%veloc_ad        ).ne.(traj%veloc_ad        ))
     write(u,'(A20,1X,L1)') 'veloc_old_ad',    any((traj%veloc_old_ad    ).ne.(traj%veloc_old_ad    ))
     write(u,'(A20,1X,L1)') 'veloc_app_ad',    any((traj%veloc_app_ad    ).ne.(traj%veloc_app_ad    ))
@@ -1282,6 +1359,7 @@ integer, parameter :: u_qm_QMout=42          !< here SHARC retrieves the results
     write(u,'(A20,1X,L1)') 'grad_MCH_old2_sad',    any((traj%grad_MCH_old2_sad    ).ne.(traj%grad_MCH_old2_sad    ))
     write(u,'(A20,1X,L1)') 'grad_Ezpe_local_sad',  any((traj%grad_Ezpe_local_sad  ).ne.(traj%grad_Ezpe_local_sad  ))
     write(u,'(A20,1X,L1)') 'grad_ad',         any((traj%grad_ad         ).ne.(traj%grad_ad         ))
+    write(u,'(A20,1X,L1)') 'grad_old_ad',     any((traj%grad_old_ad     ).ne.(traj%grad_old_ad     ))
     write(u,'(A20,1X,L1)') 'decograd_ad',     any((traj%decograd_ad     ).ne.(traj%decograd_ad     ))
     write(u,'(A20,1X,L1)') 'gRcoeff_MCH_s',   any((traj%gRcoeff_MCH_s   ).ne.(traj%gRcoeff_MCH_s   ))
     write(u,'(A20,1X,L1)') 'gRccoeff_MCH_s',  any((traj%gRccoeff_MCH_s  ).ne.(traj%gRccoeff_MCH_s  ))
@@ -1294,8 +1372,18 @@ integer, parameter :: u_qm_QMout=42          !< here SHARC retrieves the results
     write(u,'(A20,1X,L1)') 'uncertainty_time_s',   any((traj%uncertainty_time_s   ).ne.(traj%uncertainty_time_s   ))
     write(u,'(A20,1X,L1)') 'allowed_hop_s',        any((traj%allowed_hop_s        ).ne.(traj%allowed_hop_s        ))
     write(u,'(A20,1X,L1)') 'allowed_time_s',       any((traj%allowed_time_s       ).ne.(traj%allowed_time_s       ))
+    write(u,'(A20,1X,L1)') 'lpzpe_ke_zpe_ah', any((traj%lpzpe_ke_zpe_ah ).ne.(traj%lpzpe_ke_zpe_ah ))
+    write(u,'(A20,1X,L1)') 'lpzpe_ke_zpe_bc', any((traj%lpzpe_ke_zpe_bc ).ne.(traj%lpzpe_ke_zpe_bc ))
+    write(u,'(A20,1X,L1)') 't_cycle',         any((traj%t_cycle         ).ne.(traj%t_cycle         ))
+    write(u,'(A20,1X,L1)') 't_check',         any((traj%t_check         ).ne.(traj%t_check         ))
     write(u,'(A20,1X,L1)') 'lpzpe_ke_ah',     any((traj%lpzpe_ke_ah     ).ne.(traj%lpzpe_ke_ah     ))
     write(u,'(A20,1X,L1)') 'lpzpe_ke_bc',     any((traj%lpzpe_ke_bc     ).ne.(traj%lpzpe_ke_bc     ))
+    write(u,'(A20,1X,L1)') 'lpzpe_cycle',     any((traj%lpzpe_cycle     ).ne.(traj%lpzpe_cycle     ))
+    write(u,'(A20,1X,L1)') 'lpzpe_iter_incycle',   any((traj%lpzpe_iter_incycle   ).ne.(traj%lpzpe_iter_incycle   ))
+    write(u,'(A20,1X,L1)') 'lpzpe_iter_outcycle',  any((traj%lpzpe_iter_outcycle  ).ne.(traj%lpzpe_iter_outcycle  ))
+    write(u,'(A20,1X,L1)') 'lpzpe_starttime', any((traj%lpzpe_starttime ).ne.(traj%lpzpe_starttime ))
+    write(u,'(A20,1X,L1)') 'lpzpe_endtime',   any((traj%lpzpe_endtime   ).ne.(traj%lpzpe_endtime   ))
+    write(u,'(A20,1X,L1)') 'in_cycle',        any((traj%in_cycle        ).ne.(traj%in_cycle        ))
 
     write(u,*) 'Real parts:'
     write(u,'(A20,1X,L1)') 'H_MCH_ss',        any((real(traj%H_MCH_ss        )).ne.(real(traj%H_MCH_ss        )))
